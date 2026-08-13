@@ -1,143 +1,158 @@
-# Apple Music 歌单迁移工具
+# 网易云歌单一次性导入 Apple Music
 
-将你的**网易云音乐**或**酷狗音乐**歌单一键导入 **Apple Music**。
+这是基于上游 `InputAppleMusic` 改造的个人迁移工具。推荐使用根目录的
+`netease_to_apple_music.py`：它会先读取网易云歌单并匹配 Apple Music，生成
+JSON/CSV 预览报告；只有明确传入 `--commit` 并完成确认后，才会创建一个新的
+Apple Music 歌单。
 
-## 功能亮点
+## 适合的场景
 
-- **双平台支持** — 网易云音乐 / 酷狗音乐均可作为源平台
-- **精美图形界面** — 基于 PyQt6 构建，操作直观
-- **多线程并发导入** — 可调节线程数与请求间隔，平衡速度与稳定性
-- **智能限流保护** — 自动检测 Apple Music API 429 限流并指数退避重试
-- **失败列表导出** — 导入失败的歌曲会自动记录，支持导出为 JSON 文件
-- **数据清洗** — 自动去除括号后缀、合并歌手信息，提高搜索匹配率
+- 网易云“我喜欢的音乐”或普通歌单一次性搬家。
+- Apple Music 为美区、日区、港区等外区账号。
+- 希望在真正写入前检查错配、Live、翻唱和无版权歌曲。
+- 只新增一个歌单，不修改或删除已有 Apple Music 内容。
+
+## 安全设计
+
+- 默认仅预览，不写 Apple Music。
+- 自动读取当前 Apple Music 账号的 storefront，不再写死中国区。
+- 高置信度曲目和“需要复核”曲目分开；后者默认不导入。
+- 真正写入时创建新歌单，不删除、清空或重排现有歌单。
+- `media-user-token` 使用隐藏输入，不写入配置文件或迁移报告。
+- `reports/` 已加入 `.gitignore`，避免个人歌单数据被提交。
 
 ## 环境要求
 
 - Python 3.10+
-- Chrome 浏览器（酷狗歌单抓取需要）
+- 有效的 Apple Music 订阅
+- 能在浏览器登录 [Apple Music 网页版](https://music.apple.com)
 
 ## 安装
 
 ```bash
-# 克隆仓库
-git clone https://github.com/你的用户名/apple-music-transfer.git
-cd apple-music-transfer
-
-# 安装依赖
-pip install -r requirements.txt
+git clone https://github.com/sailingGit/InputAppleMusic.git
+cd InputAppleMusic
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-once.txt
 ```
 
-## 快速开始
+## 取得 Apple Music 用户令牌
 
-### 图形界面模式（推荐）
+1. 浏览器打开 [music.apple.com](https://music.apple.com) 并登录。
+2. 打开开发者工具。
+3. 在 Application（应用）→ Cookies → `https://music.apple.com` 中找到
+   `media-user-token`。
+4. 运行脚本后，在隐藏输入提示中粘贴该值。
+
+不要把该令牌发给别人、放进命令参数或提交到 GitHub。脚本会自动从 Apple
+Music 网页资源取得临时 developer token，通常不需要手工复制 Bearer Token。
+
+## 第一步：小规模预览
+
+从网易云复制“我喜欢的音乐”的分享链接，然后运行：
 
 ```bash
+python netease_to_apple_music.py "网易云分享链接" --limit 20
+```
+
+默认不会修改 Apple Music。完成后检查 `reports/` 中的：
+
+- `migration-*.csv`：适合直接查看歌曲和匹配结果。
+- `migration-*.json`：包含完整匹配信息。
+
+结果分为：
+
+- `matched`：达到自动导入阈值。
+- `needs_review`：可能正确，但需要人工复核，默认不导入。
+- `unmatched`：没有可信匹配。
+- `error`：请求或接口错误。
+
+## 第二步：小规模真实导入
+
+检查 20 首的结果没有明显错配后：
+
+```bash
+python netease_to_apple_music.py "网易云分享链接" \
+  --limit 20 \
+  --target-name "网易云迁移测试" \
+  --commit
+```
+
+脚本会显示即将导入的数量，并要求输入形如 `IMPORT 18` 的确认文本。确认后才会
+创建新歌单并写入。
+
+## 第三步：迁移完整歌单
+
+```bash
+python netease_to_apple_music.py "网易云分享链接" \
+  --target-name "网易云我喜欢的音乐" \
+  --commit
+```
+
+脚本会自动调用 `/v1/me/storefront` 检测账号地区。如果确实需要覆盖搜索地区，可加：
+
+```bash
+--storefront us
+```
+
+不建议无理由覆盖，因为账号地区与搜索地区不一致可能造成不可播放或无法写入。
+
+## 私密“我喜欢的音乐”读取失败
+
+公开分享链接通常不需要登录。如果网易云只返回部分歌曲或提示无法读取，可在当前
+终端临时提供网易云 `MUSIC_U` Cookie：
+
+```bash
+read -s NETEASE_MUSIC_U
+export NETEASE_MUSIC_U
+python netease_to_apple_music.py "网易云分享链接" --limit 20
+unset NETEASE_MUSIC_U
+```
+
+`read -s` 输入不会显示。不要把 Cookie 写进仓库文件。
+
+## 可选参数
+
+```text
+--target-name NAME    新建的 Apple Music 歌单名称
+--storefront us       覆盖自动检测的 Apple Music 地区
+--auto-score 82       自动导入阈值
+--review-score 68     人工复核阈值
+--include-review      同时导入 needs_review（风险更高）
+--limit 20            只处理前 N 首
+--commit              允许在预览后创建并写入新歌单
+--yes                 跳过最终确认，仅适合已经验证过的自动运行
+```
+
+## 旧版 GUI 与酷狗脚本
+
+上游原有代码仍保留在 `导入applemusic/` 下，包括 PyQt6 GUI、网易云脚本和酷狗
+脚本。这些旧入口仍将 Apple Music 搜索地区写死为 `cn`，也没有新的预览确认保护；
+外区账号请优先使用根目录的一次性脚本。
+
+如需运行旧版 GUI，再安装完整依赖：
+
+```bash
+python -m pip install -r requirements.txt
 python 导入applemusic/music_transfer_gui.py
 ```
 
-1. 选择来源平台（网易云/酷狗）
-2. 填写歌单链接或 ID
-3. 填写 Apple Music 配置（见下方说明）
-4. 点击「开始迁移」
-
-### 命令行模式
-
-**网易云音乐导入：**
+## 测试
 
 ```bash
-python 导入applemusic/多线程网易云导入AppleMusic.py
+python -m unittest discover -s tests -v
+python -m py_compile netease_to_apple_music.py
 ```
 
-**酷狗音乐导入：**
+## 已知限制
 
-```bash
-python 导入applemusic/多线程酷狗导入applemusic.py
-```
+- 网易云与 Apple Music 曲库、歌名和发行版本不同，不可能做到 100% 自动匹配。
+- Apple Music 和网易云网页端接口可能变化，令牌也会过期。
+- “我喜欢”的红心状态、播放次数、评论和下载文件不会迁移；迁移结果是普通播放列表。
+- 中途网络失败可能留下一个只写入部分歌曲的新歌单。报告会记录其歌单 ID，脚本不会
+  自动删除它。
 
-> **注意**：命令行模式会从项目根目录的 `config.json` 自动读取 Token，请先配置好该文件（见下方说明）。
+## 许可证
 
-## 配置说明
-
-在项目根目录创建 `config.json`（已自动纳入 `.gitignore`，不会上传到 GitHub）：
-
-```json
-{
-  "bearer_token": "你的 Bearer Token",
-  "user_token": "你的 User Token",
-  "playlist_id": "你的目标歌单 ID（以 p. 开头）"
-}
-```
-
-### Apple Music 凭证说明
-
-使用本工具需要提供以下 Apple Music API 凭证：
-
-| 配置项 | 说明 | 获取方式 |
-|--------|------|----------|
-| **目标歌单 ID** | Apple Music 中目标歌单的 ID（以 `p.` 开头） | 在 Apple Music 创建歌单后，从分享链接中获取 |
-| **Bearer Token** | 开发者临时授权令牌 | 从 Apple Music Web 请求头中获取 |
-| **User Token** | 用户身份授权令牌 | 从 Apple Music Web 请求头中获取 |
-
-> **Token 有效期**：通常为 24 小时左右，过期后需要重新抓取。
-
-### 获取 Token 的方法
-
-1. 打开浏览器，登录 [music.apple.com](https://music.apple.com)
-2. 按 `F12` 打开开发者工具
-3. 切换到「网络」(Network) 标签
-4. 刷新页面，任意找一个 API 请求
-5. 在请求头中复制 `Authorization`（Bearer Token）和 `music-user-token`（User Token）
-
-## 项目结构
-
-```
-├── 导入applemusic/
-│   ├── music_transfer_gui.py             # PyQt6 图形界面
-│   ├── 多线程网易云导入AppleMusic.py      # 网易云 → Apple Music 导入脚本
-│   ├── 多线程酷狗导入applemusic.py        # 酷狗 → Apple Music 导入脚本
-│   └── pyncm/                            # 网易云 API 解密库（第三方）
-├── config.json                     # 配置文件（已 gitignore，需自行创建）
-├── .gitignore
-├── LICENSE
-├── requirements.txt
-└── README.md
-```
-
-## 工作原理
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
-│  网易云音乐       │     │  酷狗音乐        │     │                  │
-│  (pyncm API)     │     │ (Selenium 抓取)  │     │   Apple Music    │
-│         │        │     │        │         │     │   API 导入       │
-│  提取歌单数据     │     │  提取歌单数据     │     │                  │
-└────────┬────────┘     └────────┬─────────┘     └────────┬─────────┘
-         │                       │                        │
-         └───────────┬───────────┘                        │
-                     │                                    │
-                     ▼                                    ▼
-              ┌──────────────┐                  ┌──────────────────┐
-              │ 数据清洗模块   │                  │  搜索匹配歌曲      │
-              │ 去除冗余信息   │ ──────────────►  │  写入目标歌单      │
-              └──────────────┘                  └──────────────────┘
-```
-
-## 依赖
-
-- [PyQt6](https://pypi.org/project/PyQt6/) — 图形界面
-- [requests](https://pypi.org/project/requests/) — HTTP 请求
-- [BeautifulSoup4](https://pypi.org/project/beautifulsoup4/) — HTML 解析
-- [selenium](https://pypi.org/project/selenium/) — 浏览器自动化（酷狗抓取）
-- [webdriver-manager](https://pypi.org/project/webdriver-manager/) — ChromeDriver 自动管理
-- [pyncm](https://github.com/greats3an/pyncm) — 网易云音乐 API（内嵌）
-
-## 免责声明
-
-- 本工具仅供学习交流使用，请勿用于商业用途
-- 使用本工具时请遵守 Apple Music 服务条款
-- 使用者需自行承担因使用本工具产生的任何风险和责任
-- Token 涉及个人信息，请勿提交到公共仓库
-
-## 开源协议
-
-[MIT](LICENSE)
+本 Fork 延续上游仓库的 MIT 许可证。内嵌的 `pyncm` 保留其自身许可证。

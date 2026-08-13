@@ -19,6 +19,10 @@ venv/
 
 # 配置文件（包含敏感 Token）
 config.json
+.env
+
+# 一次性迁移报告（不含 Token，但属于个人歌单数据）
+reports/
 
 # 系统
 .DS_Store
